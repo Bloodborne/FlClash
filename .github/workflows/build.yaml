@@ -29,36 +29,11 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - platform: android
-            os: ubuntu-latest
-          - platform: windows
-            os: Windows-2022
-            arch: amd64
-          - platform: linux
-            os: ubuntu-22.04
-            arch: amd64
-          - platform: macos
-            os: macos-15-intel
-            arch: amd64
           - platform: macos
             os: macos-latest
             arch: arm64
-          - platform: windows
-            os: windows-11-arm
-            arch: arm64
-          - platform: linux
-            os: ubuntu-24.04-arm
-            arch: arm64
 
     steps:
-      - name: Setup Rust on Windows ARM
-        if: startsWith(matrix.os, 'windows-11-arm')
-        shell: pwsh
-        run: |
-          Invoke-WebRequest -Uri "https://win.rustup.rs/aarch64" -OutFile rustup-init.exe
-          .\rustup-init.exe -y --default-toolchain stable
-          Add-Content $env:GITHUB_PATH "$env:USERPROFILE\.cargo\bin"
-
       - name: Checkout
         uses: actions/checkout@v4
         with:
@@ -77,14 +52,6 @@ jobs:
           workspaces: services/helper
           cache-directories: .dart_tool/hooks_runner
 
-      - name: Setup Gradle
-        if: startsWith(matrix.platform, 'android')
-        uses: gradle/actions/setup-gradle@v6
-
-      - name: Enable git long paths on Windows
-        if: startsWith(matrix.os, 'windows')
-        run: git config --global core.longpaths true
-
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
         with:
@@ -98,24 +65,13 @@ jobs:
           sudo xcode-select -s /Applications/Xcode_26.3.app || sudo xcode-select -s /Applications/Xcode_26.2.app
           xcodebuild -version
 
-      - name: Setup Android NDK
-        if: startsWith(matrix.platform, 'android')
-        uses: nttld/setup-ndk@v1
-        id: build-ndk
-        with:
-          ndk-version: ${{ env.NDK_VERSION }}
-          add-to-path: true
-          link-to-sdk: true
-
       - name: Install Flutter dependencies
         run: |
           flutter --version
           flutter pub get
 
       - name: Build package
-        env:
-          ANDROID_NDK_HOME: ${{ steps.build-ndk.outputs.ndk-path }}
-        run: dart setup.dart ${{ matrix.platform }} ${{ env.IS_STABLE == 'true' && '--env stable' || '' }} -v
+        run: dart setup.dart macos ${{ env.IS_STABLE == 'true' && '--env stable' || '' }} -v
 
       - name: Upload package artifact
         uses: actions/upload-artifact@v4

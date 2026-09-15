@@ -34,6 +34,8 @@ on Mobile:
 
 ✨ Support subscription link, Dark mode
 
+🖥️ Customizable desktop tray icons for different running states
+
 ## Use
 
 ### Linux
@@ -43,6 +45,15 @@ on Mobile:
    ```bash
     sudo apt-get install libayatana-appindicator3-dev
    ```
+
+### Desktop tray icons
+
+On desktop platforms, open “Tools → Tray icon” to configure separate icons for the stopped, system proxy, and TUN states.
+
+- PNG and ICO files are supported
+- Selected icons are copied to the application data directory
+- “Use template image” renders custom icons as monochrome templates that follow the system appearance
+- Use “Reset” to restore the default icon
 
 ### Android
 
