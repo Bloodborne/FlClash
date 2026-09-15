@@ -107,7 +107,10 @@ class AppTray implements TrayPort {
             iconPath,
             isTemplate: isMacOS && appSetting.trayIconUseTemplate,
           )
-        : TrayIcon.asset(iconPath, isTemplate: isMacOS);
+        : TrayIcon.asset(
+            iconPath,
+            isTemplate: isMacOS && appSetting.trayIconUseTemplate,
+          );
     await Tray.instance.show(
       TraySpec(
         icon: icon,
