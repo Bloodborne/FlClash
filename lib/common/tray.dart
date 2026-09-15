@@ -1,8 +1,11 @@
+import 'dart:io';
+
 import 'package:fl_clash/enum/enum.dart';
 import 'package:fl_clash/models/models.dart';
 import 'package:fl_clash/providers/providers.dart';
 import 'package:flutter/foundation.dart' show visibleForTesting;
 import 'package:flutter/services.dart';
+import 'package:path/path.dart' as p;
 import 'package:tray/tray.dart';
 
 import 'app_localizations.dart';
@@ -47,12 +50,31 @@ class AppTray implements TrayPort {
     return isWindows ? 'assets/images/tray/windows' : 'assets/images/tray/unix';
   }
 
-  String getTrayIcon({required bool isStart, required bool tunEnable}) {
-    final status = switch ((isMacOS || !isStart, tunEnable)) {
-      (true, _) => 1,
-      (false, false) => 2,
-      (false, true) => 3,
+  String getTrayIcon({
+    required bool isStart,
+    required bool tunEnable,
+    bool systemProxy = false,
+    String? customStopped,
+    String? customProxy,
+    String? customTun,
+  }) {
+    final status = switch ((isStart, tunEnable, systemProxy)) {
+      (false, _, _) || (_, false, false) => 1,
+      (_, true, _) => 3,
+      (_, false, true) => 2,
     };
+    final customPath = switch (status) {
+      1 => customStopped,
+      2 => customProxy,
+      3 => customTun,
+      _ => null,
+    };
+    if (customPath != null && File(customPath).existsSync()) {
+      return customPath;
+    }
+    if (isMacOS) {
+      return 'assets/images/icon/macos/status_$status.png';
+    }
     return '$_trayIconDir/status_$status.$_trayIconSuffix';
   }
 
@@ -71,15 +93,24 @@ class AppTray implements TrayPort {
     if (_isShutDown) {
       return;
     }
+    final appSetting = read(appSettingProvider);
+    final iconPath = getTrayIcon(
+      isStart: trayState.isStart,
+      tunEnable: trayState.tunEnable,
+      systemProxy: trayState.systemProxy,
+      customStopped: appSetting.trayIconStoppedPath,
+      customProxy: appSetting.trayIconProxyPath,
+      customTun: appSetting.trayIconTunPath,
+    );
+    final icon = p.isAbsolute(iconPath)
+        ? TrayIcon.file(
+            iconPath,
+            isTemplate: isMacOS && appSetting.trayIconUseTemplate,
+          )
+        : TrayIcon.asset(iconPath, isTemplate: isMacOS);
     await Tray.instance.show(
       TraySpec(
-        icon: TrayIcon.asset(
-          getTrayIcon(
-            isStart: trayState.isStart,
-            tunEnable: trayState.tunEnable,
-          ),
-          isTemplate: isMacOS,
-        ),
+        icon: icon,
         toolTip: appName,
         menu: _buildMenu(trayState: trayState, read: read),
       ),

@@ -898,6 +898,10 @@ class MessageLookup extends MessageLookupByLibrary {
     "specialProxy": MessageLookupByLibrary.simpleMessage("特殊プロキシ"),
     "specialRules": MessageLookupByLibrary.simpleMessage("特殊ルール"),
     "speedStatistics": MessageLookupByLibrary.simpleMessage("速度統計"),
+    "trayIcon": MessageLookupByLibrary.simpleMessage("トレイアイコン"),
+    "trayIconDesc": MessageLookupByLibrary.simpleMessage("各状態のトレイアイコンをカスタマイズ"),
+    "trayIconUseTemplate": MessageLookupByLibrary.simpleMessage("テンプレート画像を使用"),
+    "trayIconUseTemplateDesc": MessageLookupByLibrary.simpleMessage("カスタムアイコンをモノクロテンプレートとして描画（システム外観に従う）"),
     "splitStrategy": MessageLookupByLibrary.simpleMessage("振り分け戦略"),
     "splitStrategyNotEmpty": MessageLookupByLibrary.simpleMessage(
       "振り分け戦略は空にできません",

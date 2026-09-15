@@ -113,6 +113,8 @@ flutter:
       platforms: [ macos, linux ]
     - path: assets/images/tray/windows/
       platforms: [ windows ]
+    - path: assets/images/icon/macos/
+      platforms: [ macos ]
   fonts:
     - family: JetBrainsMono
       fonts:

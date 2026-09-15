@@ -1121,6 +1121,16 @@ class MessageLookup extends MessageLookupByLibrary {
     "speedStatistics": MessageLookupByLibrary.simpleMessage(
       "Статистика скорости",
     ),
+    "trayIcon": MessageLookupByLibrary.simpleMessage("Значок трея"),
+    "trayIconDesc": MessageLookupByLibrary.simpleMessage(
+      "Настройка значка трея для каждого состояния",
+    ),
+    "trayIconUseTemplate": MessageLookupByLibrary.simpleMessage(
+      "Использовать шаблон изображения",
+    ),
+    "trayIconUseTemplateDesc": MessageLookupByLibrary.simpleMessage(
+      "Отображать пользовательские значки как монохромный шаблон (следует оформлению системы)",
+    ),
     "splitStrategy": MessageLookupByLibrary.simpleMessage(
       "Стратегия распределения",
     ),

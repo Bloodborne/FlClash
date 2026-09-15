@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
@@ -99,5 +100,23 @@ void main() {
     expect(base64Decode(reps.last['bytes'] as String), [2, 2]);
     expect(lastIcon()['isTemplate'], isTrue);
     expect(lastIcon().containsKey('path'), isFalse);
+  });
+
+  test('macOS loads a custom icon from an external file', () async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.macOS;
+    final directory = await Directory.systemTemp.createTemp('tray_icon_test');
+    addTearDown(() => directory.delete(recursive: true));
+    final file = File('${directory.path}/custom.png')
+      ..writeAsBytesSync([1, 2, 3]);
+
+    await Tray.instance.show(
+      TraySpec(icon: TrayIcon.file(file.path, isTemplate: true)),
+    );
+
+    final reps = (lastIcon()['reps'] as List<Object?>)
+        .cast<Map<Object?, Object?>>();
+    expect(reps, hasLength(1));
+    expect(base64Decode(reps.single['bytes'] as String), [1, 2, 3]);
+    expect(lastIcon()['isTemplate'], isTrue);
   });
 }

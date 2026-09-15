@@ -18,6 +18,7 @@ import 'package:path/path.dart' show dirname, join;
 import 'config/advanced.dart';
 import 'developer.dart';
 import 'theme.dart';
+import 'tray_icon_setting.dart';
 
 class ToolsView extends ConsumerStatefulWidget {
   const ToolsView({super.key});
@@ -73,6 +74,7 @@ class _ToolViewState extends ConsumerState<ToolsView> {
         if (system.isDesktop) const _HotkeyItem(),
         if (system.isWindows) const _LoopbackItem(),
         if (system.isAndroid) const _AccessItem(),
+        if (system.isDesktop) const _TrayIconItem(),
         const _ConfigItem(),
         const _AdvancedConfigItem(),
         const _SettingItem(),
@@ -261,6 +263,20 @@ class _SettingItem extends StatelessWidget {
       title: Text(context.appLocalizations.application),
       subtitle: Text(context.appLocalizations.applicationDesc),
       widget: const ApplicationSettingView(),
+    );
+  }
+}
+
+class _TrayIconItem extends StatelessWidget {
+  const _TrayIconItem();
+
+  @override
+  Widget build(BuildContext context) {
+    return ListItem.open(
+      leading: const Icon(Icons.image_outlined),
+      title: Text(context.appLocalizations.trayIcon),
+      subtitle: Text(context.appLocalizations.trayIconDesc),
+      widget: const TrayIconView(),
     );
   }
 }

@@ -13,7 +13,11 @@ void main() {
         'assets/images/tray/windows/status_1.ico',
       );
       expect(
-        windows.getTrayIcon(isStart: true, tunEnable: false),
+        windows.getTrayIcon(
+          isStart: true,
+          tunEnable: false,
+          systemProxy: true,
+        ),
         'assets/images/tray/windows/status_2.ico',
       );
       expect(
@@ -28,7 +32,11 @@ void main() {
         'assets/images/tray/unix/status_1.png',
       );
       expect(
-        linux.getTrayIcon(isStart: true, tunEnable: false),
+        linux.getTrayIcon(
+          isStart: true,
+          tunEnable: false,
+          systemProxy: true,
+        ),
         'assets/images/tray/unix/status_2.png',
       );
       expect(
@@ -37,17 +45,23 @@ void main() {
       );
     });
 
-    test('macOS keeps the template icon in every state', () {
-      for (final (isStart, tunEnable) in [
-        (false, false),
-        (true, false),
-        (true, true),
-      ]) {
-        expect(
-          macOS.getTrayIcon(isStart: isStart, tunEnable: tunEnable),
-          'assets/images/tray/unix/status_1.png',
-        );
-      }
+    test('macOS selects an icon for each state', () {
+      expect(
+        macOS.getTrayIcon(isStart: false, tunEnable: false),
+        'assets/images/icon/macos/status_1.png',
+      );
+      expect(
+        macOS.getTrayIcon(
+          isStart: true,
+          tunEnable: false,
+          systemProxy: true,
+        ),
+        'assets/images/icon/macos/status_2.png',
+      );
+      expect(
+        macOS.getTrayIcon(isStart: true, tunEnable: true),
+        'assets/images/icon/macos/status_3.png',
+      );
     });
   });
 }

@@ -8,9 +8,17 @@ final class TrayIcon {
     this.isTemplate = false,
     this.size = 18,
     this.position = TrayIconPosition.leading,
-  });
+  }) : isFile = false;
+
+  const TrayIcon.file(
+    this.asset, {
+    this.isTemplate = false,
+    this.size = 18,
+    this.position = TrayIconPosition.leading,
+  }) : isFile = true;
 
   final String asset;
+  final bool isFile;
   final bool isTemplate;
   final int size;
   final TrayIconPosition position;

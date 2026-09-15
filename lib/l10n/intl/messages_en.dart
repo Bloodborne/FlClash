@@ -1075,6 +1075,16 @@ class MessageLookup extends MessageLookupByLibrary {
     "specialProxy": MessageLookupByLibrary.simpleMessage("Special proxy"),
     "specialRules": MessageLookupByLibrary.simpleMessage("Special rules"),
     "speedStatistics": MessageLookupByLibrary.simpleMessage("Speed statistics"),
+    "trayIcon": MessageLookupByLibrary.simpleMessage("Tray icon"),
+    "trayIconDesc": MessageLookupByLibrary.simpleMessage(
+      "Customize tray icon for each state",
+    ),
+    "trayIconUseTemplate": MessageLookupByLibrary.simpleMessage(
+      "Use template image",
+    ),
+    "trayIconUseTemplateDesc": MessageLookupByLibrary.simpleMessage(
+      "Render custom icons as monochrome template (follows system appearance)",
+    ),
     "splitStrategy": MessageLookupByLibrary.simpleMessage("Split strategy"),
     "splitStrategyNotEmpty": MessageLookupByLibrary.simpleMessage(
       "Split strategy cannot be empty",

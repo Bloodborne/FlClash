@@ -202,11 +202,15 @@ final class Tray {
     };
     switch (defaultTargetPlatform) {
       case TargetPlatform.macOS:
-        resolved['reps'] = await _loadRepresentations(icon.asset);
+        resolved['reps'] = icon.isFile
+            ? await _loadFileRepresentations(icon.asset)
+            : await _loadRepresentations(icon.asset);
       case TargetPlatform.linux:
-        resolved['path'] = _largestBundledVariant(icon.asset);
+        resolved['path'] = icon.isFile
+            ? icon.asset
+            : _largestBundledVariant(icon.asset);
       default:
-        resolved['path'] = _bundledPath(icon.asset);
+        resolved['path'] = icon.isFile ? icon.asset : _bundledPath(icon.asset);
     }
     return resolved;
   }
@@ -226,6 +230,19 @@ final class Tray {
       });
     }
     return reps;
+  }
+
+  Future<List<Map<String, Object?>>> _loadFileRepresentations(
+    String filePath,
+  ) async {
+    try {
+      final bytes = await File(filePath).readAsBytes();
+      return [
+        {'scale': 1.0, 'bytes': base64Encode(bytes)},
+      ];
+    } on FileSystemException {
+      return const [];
+    }
   }
 
   String _largestBundledVariant(String asset) {

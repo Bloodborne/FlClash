@@ -37,6 +37,10 @@ _AppSettingProps _$AppSettingPropsFromJson(Map<String, dynamic> json) =>
           ) ??
           RestoreStrategy.compatible,
       showTrayTitle: json['showTrayTitle'] as bool? ?? true,
+      trayIconStoppedPath: json['trayIconStoppedPath'] as String?,
+      trayIconProxyPath: json['trayIconProxyPath'] as String?,
+      trayIconTunPath: json['trayIconTunPath'] as String?,
+      trayIconUseTemplate: json['trayIconUseTemplate'] as bool? ?? false,
       checkCertificate: json['checkCertificate'] as bool? ?? true,
       customUserAgent: json['customUserAgent'] as String? ?? '',
     );
@@ -66,6 +70,10 @@ Map<String, dynamic> _$AppSettingPropsToJson(_AppSettingProps instance) =>
       'developerMode': instance.developerMode,
       'restoreStrategy': _$RestoreStrategyEnumMap[instance.restoreStrategy]!,
       'showTrayTitle': instance.showTrayTitle,
+      'trayIconStoppedPath': instance.trayIconStoppedPath,
+      'trayIconProxyPath': instance.trayIconProxyPath,
+      'trayIconTunPath': instance.trayIconTunPath,
+      'trayIconUseTemplate': instance.trayIconUseTemplate,
       'checkCertificate': instance.checkCertificate,
       'customUserAgent': instance.customUserAgent,
     };
