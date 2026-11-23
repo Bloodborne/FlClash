@@ -5,12 +5,7 @@
 list(APPEND FLUTTER_PLUGIN_LIST
   dynamic_color
   file_selector_linux
-  gtk
-  screen_retriever_linux
-  tray
   url_launcher_linux
-  wifi_ssid
-  window_manager
 )
 
 list(APPEND FLUTTER_FFI_PLUGIN_LIST

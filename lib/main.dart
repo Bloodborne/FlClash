@@ -3,21 +3,26 @@ import 'dart:io';
 
 import 'package:fl_clash/enum/enum.dart';
 import 'package:fl_clash/pages/error.dart';
-import 'package:material_ui/material_ui.dart';
+import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:rust_api/rust_api.dart';
+import 'package:shared_preferences_platform_interface/shared_preferences_platform_interface.dart';
 
 import 'application.dart';
 import 'bootstrap.dart';
+import 'common/app_data.dart';
 import 'common/common.dart';
+import 'common/preferences_store.dart';
 import 'common/window.dart';
 
-void main(List<String> args) {
+void main() {
   runZonedGuarded(
     () async {
       WidgetsFlutterBinding.ensureInitialized();
-      if (Platform.isLinux) {
-        linkManager.seedInitialLink(args);
+      if (Platform.isWindows || Platform.isLinux) {
+        SharedPreferencesStorePlatform.instance = AtomicFilePreferencesStore(
+          appPath.sharedPreferencesPath,
+        );
       }
       FlutterError.onError = (details) {
         Future.microtask(() {
@@ -31,6 +36,7 @@ void main(List<String> args) {
         await RustLib.init();
         final version = await system.init();
         final container = await bootstrap.init(version);
+        await FlClashHttpOverrides.trustCoreRoots();
         HttpOverrides.global = FlClashHttpOverrides(container);
         request.attach(container.read);
         runApp(
@@ -41,11 +47,14 @@ void main(List<String> args) {
         );
       } catch (e, s) {
         runApp(
-          MaterialApp(
-            home: InitErrorScreen(error: e, stack: s),
+          InitErrorApp(
+            error: e,
+            stack: s,
+            onClearData: clearAppData,
+            onExit: _exitAfterInitFailure,
           ),
         );
-        unawaited(window?.showInitFailure());
+        unawaited(window?.showInitFailure(onExit: _exitAfterInitFailure));
       }
     },
     (error, stack) {
@@ -54,4 +63,9 @@ void main(List<String> args) {
       );
     },
   );
+}
+
+Future<void> _exitAfterInitFailure() async {
+  await system.exit();
+  window?.forceExit();
 }

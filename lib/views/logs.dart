@@ -5,20 +5,17 @@ import 'package:fl_clash/enum/enum.dart';
 import 'package:fl_clash/models/models.dart';
 import 'package:fl_clash/providers/providers.dart';
 import 'package:fl_clash/state.dart';
+import 'package:fl_clash/ui/icons/icons.dart';
 import 'package:fl_clash/widgets/widgets.dart';
-import 'package:material_ui/material_ui.dart';
+import 'package:flutter/services.dart';
+import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:super_sliver_list/super_sliver_list.dart';
 
 class LogListController extends ValueNotifier<LogsState> {
   LogListController() : super(const LogsState());
 
   void search(String query) {
     value = value.copyWith(query: query);
-  }
-
-  void updateKeywords(List<String> keywords) {
-    value = value.copyWith(keywords: keywords);
   }
 
   void setLogs(List<Log> logs) {
@@ -48,28 +45,31 @@ class LogsView extends ConsumerStatefulWidget {
   ConsumerState<LogsView> createState() => _LogsViewState();
 }
 
-class _LogsViewState extends ConsumerState<LogsView> {
+class _LogsViewState extends ConsumerState<LogsView>
+    with RouteMotionHoldMixin<LogsView> {
   final _listController = LogListController();
+  final _filters = RecordFilterController<Log>(facets: logFacets);
   late final ScrollController _scrollController;
+  late final _physics = FollowEndScrollPhysics(
+    isFollowing: () => _listController.value.autoScrollToEnd,
+  );
 
   @override
   void initState() {
     super.initState();
-    _scrollController = ScrollController(initialScrollOffset: double.maxFinite);
-    _listController.setLogs(ref.read(logsProvider).list);
+    _scrollController = sheetScrollController(context);
+    _setLogs(ref.read(logsProvider).list);
     ref.listenManual(logsProvider.select((state) => state.revision), (_, _) {
       updateLogsThrottler();
     });
   }
 
-  List<Widget> _buildActions() {
+  List<IconButtonData> _buildActions() {
     return [
-      IconButton(
+      IconButtonData(
+        glyph: AppGlyphs.export,
         tooltip: context.appLocalizations.exportLogs,
-        onPressed: () {
-          _handleExport();
-        },
-        icon: const Icon(Icons.save_as_outlined),
+        onPressed: _handleExport,
       ),
     ];
   }
@@ -77,6 +77,7 @@ class _LogsViewState extends ConsumerState<LogsView> {
   @override
   void dispose() {
     _listController.dispose();
+    _filters.dispose();
     _scrollController.dispose();
     super.dispose();
   }
@@ -88,11 +89,16 @@ class _LogsViewState extends ConsumerState<LogsView> {
     }, title: appLocalizations.exportLogs);
     if (res != true) return;
     unawaited(
-      dialogs.showMessage(
+      dialogs.showAlert(
         title: appLocalizations.tip,
         message: TextSpan(text: appLocalizations.exportSuccess),
       ),
     );
+  }
+
+  void _setLogs(List<Log> logs) {
+    _listController.setLogs(logs);
+    _filters.offer(_listController.value.logs);
   }
 
   void updateLogsThrottler() {
@@ -100,91 +106,93 @@ class _LogsViewState extends ConsumerState<LogsView> {
       if (!mounted) {
         return;
       }
-      _listController.setLogs(ref.read(logsProvider).list);
-    }, duration: commonDuration);
+      updateWhenRouteSettled(() => _setLogs(ref.read(logsProvider).list));
+    }, duration: renderThrottleDuration);
   }
 
   @override
   Widget build(BuildContext context) {
+    final body = RecordFilterScope(
+      onFilter: _filters.add,
+      child: _buildBody(context),
+    );
+    return ListenableBuilder(
+      listenable: Listenable.merge([_filters, _filters.options]),
+      child: body,
+      builder: (context, body) {
+        final pinned = !ViewScope.isMobileOf(context);
+        return Scaffold(
+          iconActions: _buildActions(),
+          keywords: _filters.keywordsOf(pinned: pinned),
+          menuItems: _filters.menuItems(context, pinned: pinned),
+          searchState: AppBarSearchState(onSearch: _listController.search),
+          title: context.appLocalizations.logs,
+          body: body!,
+        );
+      },
+    );
+  }
+
+  Widget _buildBody(BuildContext context) {
     final appLocalizations = context.appLocalizations;
-    return CommonScaffold(
-      actions: _buildActions(),
-      onKeywordsUpdate: _listController.updateKeywords,
-      searchState: AppBarSearchState(onSearch: _listController.search),
-      title: appLocalizations.logs,
-      floatingActionButton: ValueListenableBuilder(
-        valueListenable: _listController,
-        builder: (_, state, _) {
-          final autoScrollToEnd = state.autoScrollToEnd;
-          return FadeRotationScaleBox(
-            child: FloatingActionButton(
-              key: ValueKey(autoScrollToEnd),
-              onPressed: () {
-                if (autoScrollToEnd) {
-                  _listController.setAutoScrollToEnd(false);
-                } else {
-                  _listController.resumeAutoScrollToEnd(
-                    ref.read(logsProvider).list,
-                  );
-                }
-              },
-              child: autoScrollToEnd
-                  ? const Icon(Icons.block)
-                  : const Icon(Icons.vertical_align_top),
-            ),
-          );
+    return ListenableBuilder(
+      listenable: Listenable.merge([_listController, _filters]),
+      builder: (context, _) {
+        final state = _listController.value;
+        final logs = _filters.apply(state.list);
+        return NullStatusSwitcher(
+          isEmpty: logs.isEmpty,
+          isSearching: state.isSearching || _filters.isFiltering,
+          nullStatus: NullStatus(
+            illustration: NullStatusIllustration.logs,
+            label: appLocalizations.nullTip(appLocalizations.logs),
+          ),
+          child: _buildList(context, state, logs),
+        );
+      },
+    );
+  }
+
+  Widget _buildList(BuildContext context, LogsState state, List<Log> logs) {
+    final selectable = !ViewScope.isMobileOf(context);
+    final padding = EdgeInsets.only(
+      top: context.contentTopPadding,
+      bottom: 16 + context.bottomInset,
+    );
+    return Align(
+      alignment: Alignment.topCenter,
+      child: FloatingScrollbar(
+        controller: _scrollController,
+        hintBuilder: (fraction) {
+          final index = (fraction * (logs.length - 1)).round();
+          return logs[index].dateTime;
         },
-      ),
-      body: ValueListenableBuilder<LogsState>(
-        valueListenable: _listController,
-        builder: (context, state, _) {
-          final logs = state.list;
-          return NullStatusSwitcher(
-            isEmpty: logs.isEmpty,
-            nullStatus: NullStatus(
-              illustration: NullStatusIllustration.logs,
-              label: appLocalizations.nullTip(appLocalizations.logs),
+        child: ScrollToEndBox(
+          onCancelToEnd: () {
+            _listController.setAutoScrollToEnd(false);
+          },
+          onResumeToEnd: () {
+            _listController.resumeAutoScrollToEnd(ref.read(logsProvider).list);
+            _filters.offer(_listController.value.logs);
+          },
+          controller: _scrollController,
+          enable: state.autoScrollToEnd,
+          child: RecordFeedList<Log>(
+            physics: _physics,
+            reverse: true,
+            shrinkWrap: true,
+            controller: _scrollController,
+            padding: padding,
+            items: logs,
+            keyOf: ObjectKey.new,
+            gap: recordListGap,
+            estimatedItemExtent: recordListEstimatedExtent,
+            itemBuilder: (log, _, _) => MemoBuilder(
+              inputs: [log, selectable],
+              builder: (_) => LogItem(log: log, selectable: selectable),
             ),
-            child: Align(
-              alignment: Alignment.topCenter,
-              child: FloatingScrollbar(
-                controller: _scrollController,
-                hintBuilder: (fraction) {
-                  final index = (fraction * (logs.length - 1)).round();
-                  return logs[index].dateTime;
-                },
-                child: ScrollToEndBox(
-                  onCancelToEnd: () {
-                    _listController.setAutoScrollToEnd(false);
-                  },
-                  controller: _scrollController,
-                  enable: state.autoScrollToEnd,
-                  dataSource: logs,
-                  child: SuperListView.separated(
-                    physics: const NextClampingScrollPhysics(),
-                    reverse: true,
-                    shrinkWrap: true,
-                    controller: _scrollController,
-                    padding: EdgeInsets.only(
-                      bottom: 16 + BottomInsetScope.of(context),
-                    ),
-                    itemCount: logs.length,
-                    separatorBuilder: (_, _) => const Divider(height: 0),
-                    itemBuilder: (_, index) {
-                      final log = logs[index];
-                      return LogItem(
-                        log: log,
-                        onClick: (value) {
-                          context.commonScaffoldState?.addKeyword(value);
-                        },
-                      );
-                    },
-                  ),
-                ),
-              ),
-            ),
-          );
-        },
+          ),
+        ),
       ),
     );
   }
@@ -192,49 +200,169 @@ class _LogsViewState extends ConsumerState<LogsView> {
 
 class LogItem extends StatelessWidget {
   final Log log;
-  final Function(String)? onClick;
 
-  const LogItem({super.key, required this.log, this.onClick});
+  /// Whether the text is selected in place; otherwise a tap opens the log's
+  /// details, where a phone can select and copy it without fighting the
+  /// list's scroll.
+  final bool selectable;
+
+  const LogItem({super.key, required this.log, this.selectable = true});
 
   @override
   Widget build(BuildContext context) {
-    return ListItem(
-      padding: const EdgeInsets.symmetric(
-        horizontal: 16,
-        vertical: 8,
-      ).copyWith(bottom: 12),
-      onTap: () {},
-      minVerticalPadding: 0,
-      title: SelectableText(
-        log.payload,
-        style: context.textTheme.bodyLarge?.copyWith(
-          color: log.logLevel.color(context),
-        ),
-      ),
-      subtitle: Padding(
-        padding: const EdgeInsets.only(top: 4),
-        child: Row(
-          spacing: 8,
-          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-          children: [
-            CommonChip(
-              label: log.logLevel.name,
-              onPressed: () => onClick?.call(log.logLevel.name),
+    final tone = switch (log.logLevel) {
+      LogLevel.warning => RecordTone.warning,
+      LogLevel.error => RecordTone.error,
+      LogLevel.info || LogLevel.debug || LogLevel.silent => RecordTone.neutral,
+    };
+    final payload = log.parsed;
+    return RecordListItem(
+      onTap: selectable ? () {} : () => _showLogDetail(context, log),
+      header: RecordHeader(
+        children: [
+          RecordTimestamp(log.dateTime),
+          RecordLabel(
+            label: log.logLevel.name,
+            tone: tone,
+            onPressed: () => RecordFilterScope.add(
+              context,
+              RecordFilter(RecordFacetKind.level, log.logLevel.name),
             ),
-            Flexible(
-              child: Text(
-                log.dateTime,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                textAlign: TextAlign.end,
-                style: context.textTheme.bodySmall?.copyWith(
-                  color: context.colorScheme.onSurfaceVariant,
-                ),
+          ),
+        ],
+      ),
+      body: _LogBody(
+        payload: payload,
+        errorColor: tone.accentColor(context),
+        selectable: selectable,
+      ),
+    );
+  }
+}
+
+class _LogBody extends StatelessWidget {
+  final LogPayload payload;
+  final Color? errorColor;
+  final bool selectable;
+
+  const _LogBody({
+    required this.payload,
+    required this.selectable,
+    this.errorColor,
+  });
+
+  String get _sourceText => [
+    payload.tag,
+    if (payload.route case final route?) ...[route.source, route.sourceDetail],
+  ].where((text) => text.isNotEmpty).join('  ·  ');
+
+  @override
+  Widget build(BuildContext context) {
+    final styles = RecordTextStyles.of(context);
+    final route = payload.route;
+    if (route == null) {
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          selectable
+              ? SelectableText(payload.message, style: styles.primary)
+              : Text(payload.message, style: styles.primary),
+          if (payload.tag.isNotEmpty)
+            Text(payload.tag, style: styles.secondary),
+        ],
+      );
+    }
+    final text = TextSpan(
+      children: [
+        TextSpan(text: route.destination, style: styles.title),
+        if (route.error.isNotEmpty)
+          TextSpan(
+            text: '\n${route.error}',
+            style: styles.secondary.copyWith(color: errorColor),
+          ),
+        const TextSpan(text: '\n'),
+        if (route.rule.isNotEmpty) ...[
+          TextSpan(text: route.rule, style: styles.secondary),
+          TextSpan(text: ' \u2192 ', style: styles.secondary.toJetBrainsMono),
+        ],
+        TextSpan(
+          text: route.proxy,
+          style: AppTextStyle.footnote
+              .of(context, emphasized: true)
+              .copyWith(color: context.colorScheme.primary),
+        ),
+        TextSpan(text: '\n$_sourceText', style: styles.secondary),
+      ],
+    );
+    return selectable ? SelectableText.rich(text) : Text.rich(text);
+  }
+}
+
+void _showLogDetail(BuildContext context, Log log) {
+  final appLocalizations = context.appLocalizations;
+  showNestedSheet<void>(
+    context,
+    builder: (context) => Scaffold(
+      title: appLocalizations.details(appLocalizations.log),
+      iconActions: [
+        IconButtonData(
+          glyph: AppGlyphs.copy,
+          tooltip: appLocalizations.copy,
+          onPressed: () => _copyLog(context, log),
+        ),
+      ],
+      body: _LogDetailView(log: log),
+    ),
+  );
+}
+
+Future<void> _copyLog(BuildContext context, Log log) async {
+  final copySuccess = context.appLocalizations.copySuccess;
+  await Clipboard.setData(
+    ClipboardData(
+      text: '${log.dateTime} [${log.logLevel.name}] ${log.payload}',
+    ),
+  );
+  dialogs.showBanner(copySuccess);
+}
+
+class _LogDetailView extends StatelessWidget {
+  final Log log;
+
+  const _LogDetailView({required this.log});
+
+  @override
+  Widget build(BuildContext context) {
+    final appLocalizations = context.appLocalizations;
+    return ListView(
+      padding: const EdgeInsets.symmetric(horizontal: 16).copyWith(
+        bottom: 20 + context.bottomInset,
+        top: context.sectionsTopPadding,
+      ),
+      children: [
+        generateSection(
+          title: appLocalizations.basicInfo,
+          items: [
+            DetailRow.text(title: appLocalizations.time, value: log.dateTime),
+            DetailRow.text(
+              title: appLocalizations.logLevel,
+              value: log.logLevel.name,
+            ),
+          ],
+        ),
+        generateSection(
+          title: appLocalizations.content,
+          items: [
+            DecorationListItem(
+              minVerticalPadding: 14,
+              title: SelectableText(
+                log.payload,
+                style: AppTextStyle.subheadline.of(context),
               ),
             ),
           ],
         ),
-      ),
+      ],
     );
   }
 }

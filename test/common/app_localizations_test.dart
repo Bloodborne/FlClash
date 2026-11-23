@@ -1,50 +1,149 @@
+import 'dart:async';
+import 'dart:io';
+
 import 'package:dio/dio.dart';
 import 'package:fl_clash/common/app_localizations.dart';
+import 'package:fl_clash/common/network_error.dart';
+import 'package:fl_clash/common/webdav.dart';
 import 'package:fl_clash/core/desktop/helper_client.dart';
 import 'package:fl_clash/core/desktop/launch_policy.dart';
 import 'package:fl_clash/core/desktop/model.dart';
 import 'package:fl_clash/core/method.dart';
 import 'package:fl_clash/l10n/l10n.dart';
-import 'package:material_ui/material_ui.dart';
+import 'package:flutter/widgets.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
   late AppLocalizations appLocalizations;
 
   setUpAll(() async {
-    appLocalizations = await AppLocalizations.load(const Locale('en'));
+    appLocalizations = loadAppLocalizations(const Locale('en'));
   });
 
-  test('maps badResponse DioException to the network exception message', () {
-    final message = networkErrorMessage(
-      DioException(
-        requestOptions: RequestOptions(path: '/'),
-        type: DioExceptionType.badResponse,
-      ),
-      appLocalizations,
+  DioException dioError(
+    DioExceptionType type, {
+    int? statusCode,
+    Object? cause,
+  }) {
+    final options = RequestOptions(path: '/');
+    return DioException(
+      requestOptions: options,
+      type: type,
+      error: cause,
+      response: statusCode == null
+          ? null
+          : Response<void>(requestOptions: options, statusCode: statusCode),
     );
-    expect(message, appLocalizations.networkException);
+  }
+
+  group('Dio failures name their cause', () {
+    final cases = <String, (DioException, String Function(AppLocalizations))>{
+      'timeout': (
+        dioError(DioExceptionType.receiveTimeout),
+        (l) => l.networkTimeoutError,
+      ),
+      'host lookup': (
+        dioError(
+          DioExceptionType.connectionError,
+          cause: const SocketException("Failed host lookup: 'sub.example'"),
+        ),
+        (l) => l.networkHostLookupError,
+      ),
+      'refused connection': (
+        dioError(
+          DioExceptionType.connectionError,
+          cause: const SocketException('Connection refused'),
+        ),
+        (l) => l.networkConnectionError,
+      ),
+      'TLS handshake': (
+        dioError(
+          DioExceptionType.unknown,
+          cause: const HandshakeException('CERTIFICATE_VERIFY_FAILED'),
+        ),
+        (l) => l.networkTlsError,
+      ),
+      'bad certificate': (
+        dioError(DioExceptionType.badCertificate),
+        (l) => l.networkTlsError,
+      ),
+      'HTTP 403': (
+        dioError(DioExceptionType.badResponse, statusCode: 403),
+        (l) => l.networkAccessDeniedError(403),
+      ),
+      'HTTP 404': (
+        dioError(DioExceptionType.badResponse, statusCode: 404),
+        (l) => l.networkNotFoundError(404),
+      ),
+      'HTTP 429': (
+        dioError(DioExceptionType.badResponse, statusCode: 429),
+        (l) => l.networkRateLimitedError,
+      ),
+      'HTTP 502': (
+        dioError(DioExceptionType.badResponse, statusCode: 502),
+        (l) => l.networkServerError(502),
+      ),
+      'HTTP 400': (
+        dioError(DioExceptionType.badResponse, statusCode: 400),
+        (l) => l.networkBadResponseError(400),
+      ),
+    };
+    for (final MapEntry(key: name, value: (error, expected)) in cases.entries) {
+      test(name, () {
+        expect(
+          networkErrorMessage(error, appLocalizations),
+          expected(appLocalizations),
+        );
+      });
+    }
   });
 
-  test(
-    'maps other DioException types to the unknown network error message',
-    () {
-      final message = networkErrorMessage(
-        DioException(
-          requestOptions: RequestOptions(path: '/'),
-          type: DioExceptionType.connectionError,
-        ),
-        appLocalizations,
-      );
-      expect(message, appLocalizations.unknownNetworkError);
-    },
-  );
+  test('keeps the detail of an unclassified Dio failure', () {
+    final error = DioException(
+      requestOptions: RequestOptions(path: '/'),
+      error: const FormatException('bad body'),
+      message: 'bad body',
+    );
+    expect(
+      networkErrorMessage(error, appLocalizations),
+      appLocalizations.networkRequestFailed('bad body'),
+    );
+  });
 
-  test('returns null for non-Dio exceptions', () {
+  test('leaves bare socket and timeout errors to the caller', () {
+    expect(
+      networkErrorMessage(const SocketException('refused'), appLocalizations),
+      isNull,
+    );
+    expect(
+      networkErrorMessage(TimeoutException('core'), appLocalizations),
+      isNull,
+    );
     expect(networkErrorMessage(StateError('boom'), appLocalizations), isNull);
   });
 
-  test('maps Core request failures using the same network categories', () {
+  test('maps WebDAV status failures like any HTTP response', () {
+    expect(
+      networkErrorMessage(
+        const DAVException(method: 'PUT', path: '/a', statusCode: 401),
+        appLocalizations,
+      ),
+      appLocalizations.networkAccessDeniedError(401),
+    );
+  });
+
+  test('maps Core request failures by their reason and status', () {
+    expect(
+      networkErrorMessage(
+        const CoreMethodException(
+          code: 'request_bad_response',
+          message: '403 Forbidden',
+          details: {'providerName': 'sub', 'statusCode': 403},
+        ),
+        appLocalizations,
+      ),
+      appLocalizations.networkAccessDeniedError(403),
+    );
     expect(
       networkErrorMessage(
         const CoreMethodException(
@@ -53,17 +152,25 @@ void main() {
         ),
         appLocalizations,
       ),
-      appLocalizations.networkException,
+      appLocalizations.networkServerError(503),
     );
     expect(
       networkErrorMessage(
         const CoreMethodException(
           code: 'request_error',
-          message: 'request timed out',
+          message: 'context deadline exceeded',
+          details: {'reason': 'timeout'},
         ),
         appLocalizations,
       ),
-      appLocalizations.unknownNetworkError,
+      appLocalizations.networkTimeoutError,
+    );
+    expect(
+      networkErrorMessage(
+        const CoreMethodException(code: 'request_error', message: 'odd'),
+        appLocalizations,
+      ),
+      appLocalizations.networkRequestFailed('odd'),
     );
   });
 
@@ -78,6 +185,32 @@ void main() {
       ),
       'proxy 0: unsupported type',
     );
+  });
+
+  group('a lost Core session', () {
+    test('says the connection is gone when it has no cause', () {
+      expect(
+        coreSessionLostMessage(null, appLocalizations),
+        'The app lost its connection to the core',
+      );
+      expect(
+        coreSessionLostMessage(
+          null,
+          lookupAppLocalizations(const Locale('zh')),
+        ),
+        '应用与核心的连接已断开',
+      );
+    });
+
+    test('adds the cause in the words used for any error', () {
+      expect(
+        coreSessionLostMessage(
+          const CoreMethodException(code: 'io', message: 'pipe reset'),
+          appLocalizations,
+        ),
+        'The app lost its connection to the core: pipe reset',
+      );
+    });
   });
 
   group('policy-blocked Core launch', () {

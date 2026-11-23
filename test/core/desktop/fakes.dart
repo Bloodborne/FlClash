@@ -23,9 +23,11 @@ final class FakeDesktopCoreTransport implements DesktopCoreTransport {
   TransportConnected? _connection;
   TransportFailed? _failure;
   Object? closeError;
+  Object? resetError;
   Future<void>? _closeOperation;
   final Completer<void> _closed = Completer<void>();
   int closeCount = 0;
+  int resetCount = 0;
 
   FakeDesktopCoreTransport({
     this.address = 'test-address',
@@ -43,6 +45,9 @@ final class FakeDesktopCoreTransport implements DesktopCoreTransport {
     transport._connection = TransportConnected(pid: pid, generation: 1);
     return transport;
   }
+
+  @override
+  TransportConnected? get connection => _connection;
 
   @override
   Stream<DesktopTransportEvent> get events => _eventController.stream;
@@ -65,6 +70,22 @@ final class FakeDesktopCoreTransport implements DesktopCoreTransport {
     );
     if (event case TransportFailed(:final error, :final stackTrace)) {
       Error.throwWithStackTrace(error, stackTrace);
+    }
+  }
+
+  @override
+  Future<void> reset() async {
+    resetCount++;
+    final connection = _connection;
+    _connection = null;
+    _failure = null;
+    state = DesktopTransportState.idle;
+    if (connection != null) {
+      _eventController.add(TransportDisconnected(connection.generation));
+    }
+    final error = resetError;
+    if (error != null) {
+      Error.throwWithStackTrace(error, StackTrace.current);
     }
   }
 
@@ -127,7 +148,7 @@ final class FakeDesktopCoreTransport implements DesktopCoreTransport {
   }
 
   @override
-  Future<void> send(String message) async {
+  void send(List<int> frame) {
     if (state == DesktopTransportState.closed) {
       throw StateError('IPC transport is closed');
     }
@@ -135,7 +156,7 @@ final class FakeDesktopCoreTransport implements DesktopCoreTransport {
     if (error != null) {
       Error.throwWithStackTrace(error, StackTrace.current);
     }
-    sentMessages.add(message);
+    sentMessages.add(utf8.decode(frame));
   }
 
   @override

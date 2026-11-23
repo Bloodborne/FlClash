@@ -1,11 +1,11 @@
 #include "my_application.h"
 
+#include <cstring>
+
 #include <flutter_linux/flutter_linux.h>
 #ifdef GDK_WINDOWING_X11
 #include <gdk/gdkx.h>
 #endif
-
-#include <window_manager/window_manager_plugin.h>
 
 #include "flutter/generated_plugin_registrant.h"
 
@@ -55,6 +55,21 @@ static void my_application_activate(GApplication* application) {
 
   gtk_window_set_default_size(window, 680, 580);
 
+  // X11 panels that do not match the window to a desktop entry read its icon;
+  // GDK leaves one over 512x512 out of _NET_WM_ICON without a word.
+  g_autofree gchar* executable = g_file_read_link("/proc/self/exe", nullptr);
+  if (executable != nullptr) {
+    g_autofree gchar* directory = g_path_get_dirname(executable);
+    g_autofree gchar* path = g_build_filename(
+        directory, "data", "flutter_assets", "assets", "images", "icon.png",
+        nullptr);
+    g_autoptr(GdkPixbuf) icon =
+        gdk_pixbuf_new_from_file_at_size(path, 256, 256, nullptr);
+    if (icon != nullptr) {
+      gtk_window_set_icon(window, icon);
+    }
+  }
+
   g_autoptr(FlDartProject) project = fl_dart_project_new();
   fl_dart_project_set_dart_entrypoint_arguments(project, self->dart_entrypoint_arguments);
 
@@ -75,15 +90,38 @@ static void my_application_activate(GApplication* application) {
   gtk_widget_grab_focus(GTK_WIDGET(view));
 }
 
+static void forward_links(MyApplication* self, gchar** arguments) {
+  GActionGroup* actions = G_ACTION_GROUP(self);
+  for (gchar** argument = arguments; *argument != nullptr; argument++) {
+    if (strstr(*argument, "://") == nullptr) {
+      continue;
+    }
+    if (g_action_group_has_action(actions, "open-link")) {
+      g_action_group_activate_action(actions, "open-link",
+                                     g_variant_new_string(*argument));
+      continue;
+    }
+    auto* pending = static_cast<GPtrArray*>(
+        g_object_get_data(G_OBJECT(self), "flclash-pending-links"));
+    if (pending == nullptr) {
+      pending = g_ptr_array_new_with_free_func(g_free);
+      g_object_set_data_full(G_OBJECT(self), "flclash-pending-links", pending,
+                             reinterpret_cast<GDestroyNotify>(g_ptr_array_unref));
+    }
+    g_ptr_array_add(pending, g_strdup(*argument));
+  }
+}
+
 // Implements GApplication::command_line.
 static gint my_application_command_line(GApplication* application, GApplicationCommandLine* command_line) {
   MyApplication* self = MY_APPLICATION(application);
+  gchar** arguments = g_application_command_line_get_arguments(command_line, nullptr);
   if (self->dart_entrypoint_arguments == nullptr) {
-    gchar** arguments = g_application_command_line_get_arguments(command_line, nullptr);
-    // Strip out the first argument as it is the binary name.
     self->dart_entrypoint_arguments = g_strdupv(arguments + 1);
-    g_strfreev(arguments);
+  } else {
+    forward_links(self, arguments + 1);
   }
+  g_strfreev(arguments);
   g_application_activate(application);
   return 0;
 }
@@ -97,12 +135,16 @@ static void my_application_before_emit(GApplication* application, GVariant* plat
 }
 
 // Implements GApplication::after_emit. A relaunch reaches the primary as a
-// command-line signal that the gtk plugin consumes first, so the window is
-// raised here, while the launcher's activation token is still current.
+// command-line signal whose activate returns early on the existing window, so
+// the window is raised here, while the launcher's activation token is still
+// current.
 static void my_application_after_emit(GApplication* application, GVariant* platform_data) {
   MyApplication* self = MY_APPLICATION(application);
-  if (self->had_window_before_emit) {
-    window_manager_plugin_activate();
+  // rust_api's window module adds this action once Dart listens to the window.
+  if (self->had_window_before_emit &&
+      g_action_group_has_action(G_ACTION_GROUP(application), "activate-window")) {
+    g_action_group_activate_action(G_ACTION_GROUP(application), "activate-window",
+                                   nullptr);
   }
   G_APPLICATION_CLASS(my_application_parent_class)->after_emit(application, platform_data);
 }

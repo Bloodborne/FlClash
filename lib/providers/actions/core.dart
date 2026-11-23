@@ -15,10 +15,10 @@ class CoreAction extends _$CoreAction {
 
     final version = ref.read(versionProvider);
     if (!isInit) {
-      final res = await _core.init(version);
-      commonPrint.log('init result: $res');
+      await _core.init(version);
     } else {
       await ref.read(proxiesActionProvider.notifier).updateGroups();
+      await ref.read(providersProvider.notifier).syncProviders();
     }
   }
 
@@ -28,9 +28,20 @@ class CoreAction extends _$CoreAction {
       final result = await startLifecycle();
       await _applyLifecycleResult(result);
     } catch (error) {
-      ref.read(coreStatusProvider.notifier).value = CoreStatus.disconnected;
-      dialogs.showNotifier(error.toString(), level: MessageLevel.error);
+      _markStopped(error);
+      dialogs.showBanner(
+        ref.read(coreStopReasonProvider) ?? '',
+        level: BannerLevel.error,
+      );
     }
+  }
+
+  void _markStopped(Object error) {
+    ref.read(coreStatusProvider.notifier).value = CoreStatus.disconnected;
+    final reason = userFacingErrorMessage(error, currentAppLocalizations);
+    ref.read(coreStopReasonProvider.notifier).value = reason.isEmpty
+        ? null
+        : reason;
   }
 
   @protected
@@ -60,6 +71,9 @@ class CoreAction extends _$CoreAction {
       await initCore();
       ref.read(coreStatusProvider.notifier).value = CoreStatus.connected;
     }
+    if (rsFeature && ref.read(patchClashConfigProvider).mitm.enable) {
+      unawaited(ref.read(mitmTrustStateProvider.notifier).refresh());
+    }
     return true;
   }
 
@@ -71,8 +85,22 @@ class CoreAction extends _$CoreAction {
     await _core.closeConnections();
   }
 
-  Future<void> requestGc() async {
-    await _core.requestGc();
+  Future<void> reportNetworkChange() async {
+    if (ref.read(coreStatusProvider) != CoreStatus.connected) {
+      return;
+    }
+    try {
+      await _core.reportNetworkChange();
+    } catch (error) {
+      commonPrint.log(
+        'reportNetworkChange error: $error',
+        logLevel: coreFailureLogLevel(error),
+      );
+    }
+  }
+
+  Future<void> forceGc() async {
+    await _core.forceGc();
   }
 
   Future<void> crash() async {
@@ -103,7 +131,7 @@ class CoreAction extends _$CoreAction {
       var applied = true;
       while (appliedRevision < _requestedRestartRevision) {
         final revision = _requestedRestartRevision;
-        if (ref.read(isStartProvider)) {
+        if (ref.read(setupActionProvider.notifier).wantsRunning) {
           applied = await ref
               .read(setupActionProvider.notifier)
               .setRunning(true, initialize: true);
@@ -115,8 +143,8 @@ class CoreAction extends _$CoreAction {
         appliedRevision = revision;
       }
       return applied;
-    } catch (_) {
-      ref.read(coreStatusProvider.notifier).value = CoreStatus.disconnected;
+    } catch (error) {
+      _markStopped(error);
       rethrow;
     } finally {
       _restartOperation = null;

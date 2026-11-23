@@ -1,23 +1,25 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:fl_clash/common/app_localizations.dart';
 import 'package:fl_clash/common/app_ports.dart';
-import 'package:fl_clash/l10n/l10n.dart';
 import 'package:fl_clash/manager/window_manager.dart';
 import 'package:fl_clash/models/config.dart';
 import 'package:fl_clash/providers/providers.dart';
 import 'package:fl_clash/state.dart';
-import 'package:material_ui/material_ui.dart';
+import 'package:fl_clash/ui/icons/icons.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:window_manager/window_manager.dart'
-    show WindowListener, windowManager;
+import 'package:prism_ui/prism_ui.dart';
+import 'package:rust_api/window.dart'
+    show WindowEvent, WindowListener, desktopWindow;
 
+import '../helpers/fake_desktop_window.dart';
+import '../helpers/glyph_finders.dart';
 import '../helpers/test_app.dart';
 import '../helpers/test_profiles.dart';
-
-const _windowChannel = MethodChannel('window_manager');
 
 class _RecordingSystemAction extends SystemAction {
   static final calls = <String>[];
@@ -33,12 +35,26 @@ class _RecordingSystemAction extends SystemAction {
   }
 }
 
+typedef _BlurRequest = ({bool enabled, Brightness brightness, Color tint});
+
 class _RecordingWindowPort implements WindowPort {
   Rect bounds = const Rect.fromLTWH(0, 0, 1000, 800);
   int shows = 0;
   Completer<void>? geometryGate;
   bool isNormal = true;
   bool supportsPosition = true;
+  bool supportsBlur = true;
+  final blurRequests = <_BlurRequest>[];
+
+  @override
+  Future<double?> setBlur({
+    required bool enabled,
+    required Brightness brightness,
+    required Color tint,
+  }) async {
+    blurRequests.add((enabled: enabled, brightness: brightness, tint: tint));
+    return enabled && supportsBlur ? 0 : null;
+  }
 
   @override
   Future<WindowProps?> captureNormalGeometry(WindowProps current) async {
@@ -80,18 +96,17 @@ void main() {
 
   late ProviderContainer container;
   late _RecordingWindowPort window;
-  late List<MethodCall> windowCalls;
+  late FakeDesktopWindow fakeWindow;
   late bool isAlwaysOnTop;
   late bool isMaximized;
   late bool isFullScreen;
 
   setUpAll(() async {
-    await AppLocalizations.load(const Locale('en'));
+    loadAppLocalizations(const Locale('en'));
   });
 
   setUp(() {
     _RecordingSystemAction.calls.clear();
-    windowCalls = [];
     isAlwaysOnTop = false;
     isMaximized = false;
     isFullScreen = false;
@@ -104,33 +119,37 @@ void main() {
       ],
     );
     globalState.container = container;
-    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
-        .setMockMethodCallHandler(_windowChannel, (call) async {
-          windowCalls.add(call);
-          if (call.method == 'setAlwaysOnTop') {
-            isAlwaysOnTop = call.arguments['isAlwaysOnTop'] as bool;
-          }
-          return switch (call.method) {
-            'isAlwaysOnTop' => isAlwaysOnTop,
-            'isMaximized' => isMaximized,
-            'isFullScreen' => isFullScreen,
-            _ => null,
-          };
-        });
+    fakeWindow = FakeDesktopWindow((call) {
+      if (call.method == 'setAlwaysOnTop') {
+        isAlwaysOnTop = call.arguments['value'] as bool;
+      }
+      return switch (call.method) {
+        'isAlwaysOnTop' => isAlwaysOnTop,
+        'isMaximized' => isMaximized,
+        'isFullScreen' => isFullScreen,
+        _ => null,
+      };
+    }).install();
   });
 
   tearDown(() {
     windowPort = null;
-    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
-        .setMockMethodCallHandler(_windowChannel, null);
     container.dispose();
   });
 
-  Future<WindowListener> pumpWindowManager(WidgetTester tester) async {
+  Future<WindowListener> pumpWindowManager(
+    WidgetTester tester, {
+    Stream<ProcessSignal>? terminateSignals,
+  }) async {
     await tester.pumpWidget(
       UncontrolledProviderScope(
         container: container,
-        child: const MaterialApp(home: WindowManager(child: SizedBox.shrink())),
+        child: HostApp(
+          home: WindowManager(
+            terminateSignals: terminateSignals,
+            child: const SizedBox.shrink(),
+          ),
+        ),
       ),
     );
     await tester.pump();
@@ -170,11 +189,27 @@ void main() {
     expect(_RecordingSystemAction.calls, ['exit']);
   });
 
+  testWidgets('a terminate signal exits like a terminate request', (
+    tester,
+  ) async {
+    final signals = StreamController<ProcessSignal>();
+    addTearDown(signals.close);
+    await pumpWindowManager(tester, terminateSignals: signals.stream);
+
+    signals.add(ProcessSignal.sigterm);
+    await tester.pumpAndSettle();
+
+    expect(_RecordingSystemAction.calls, ['exit']);
+
+    await tester.pumpWidget(const SizedBox.shrink());
+    expect(signals.hasListener, isFalse);
+  });
+
   testWidgets('moving the window records its new position', (tester) async {
     final listener = await pumpWindowManager(tester);
     window.bounds = const Rect.fromLTWH(120, 64, 1000, 800);
 
-    listener.onWindowMove();
+    listener.onWindowGeometryChanged();
     await settleWindowGeometry(tester);
 
     final setting = container.read(windowSettingProvider);
@@ -186,7 +221,7 @@ void main() {
     final listener = await pumpWindowManager(tester);
     window.bounds = const Rect.fromLTWH(0, 0, 1280, 960);
 
-    listener.onWindowResize();
+    listener.onWindowGeometryChanged();
     await settleWindowGeometry(tester);
 
     final setting = container.read(windowSettingProvider);
@@ -201,11 +236,78 @@ void main() {
 
     listener.onWindowMinimize();
     listener.onWindowRestore();
-    listener.onWindowFocus();
     await tester.pump(const Duration(seconds: 1));
     await tester.pumpAndSettle();
 
     expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('sidebar blur starts off and start-up still asks for no effect', (
+    tester,
+  ) async {
+    await pumpWindowManager(tester);
+    await tester.pumpAndSettle();
+
+    expect(container.read(themeSettingProvider).sidebarBlur, isFalse);
+    expect(window.blurRequests.single.enabled, isFalse);
+    expect(container.read(windowBlurProvider), isNull);
+  });
+
+  group('sidebar blur', () {
+    setUp(() {
+      container
+          .read(themeSettingProvider.notifier)
+          .update((state) => state.copyWith(sidebarBlur: true));
+    });
+
+    testWidgets('is applied on start and mirrored into the provider', (
+      tester,
+    ) async {
+      await pumpWindowManager(tester);
+      await tester.pumpAndSettle();
+
+      expect(window.blurRequests, hasLength(1));
+      expect(window.blurRequests.single.enabled, isTrue);
+      expect(window.blurRequests.single.brightness, Brightness.dark);
+      expect(container.read(windowBlurProvider), 0);
+    });
+
+    testWidgets('a platform without a backdrop leaves the provider off', (
+      tester,
+    ) async {
+      window.supportsBlur = false;
+      await pumpWindowManager(tester);
+      await tester.pumpAndSettle();
+
+      expect(container.read(windowBlurProvider), isNull);
+    });
+
+    testWidgets('turning the setting off drops the backdrop', (tester) async {
+      await pumpWindowManager(tester);
+      await tester.pumpAndSettle();
+
+      container
+          .read(themeSettingProvider.notifier)
+          .update((state) => state.copyWith(sidebarBlur: false));
+      await tester.pumpAndSettle();
+
+      expect(window.blurRequests.last.enabled, isFalse);
+      expect(container.read(windowBlurProvider), isNull);
+    });
+
+    testWidgets('a theme mode change reapplies the effect', (tester) async {
+      await pumpWindowManager(tester);
+      await tester.pumpAndSettle();
+
+      container
+          .read(themeSettingProvider.notifier)
+          .update((state) => state.copyWith(themeMode: ThemeMode.light));
+      await tester.pumpAndSettle();
+
+      expect(window.blurRequests.last.enabled, isTrue);
+      expect(window.blurRequests.last.brightness, Brightness.light);
+      expect(container.read(windowBlurProvider), 0);
+    });
   });
 
   testWidgets('an activate request shows the window through the port', (
@@ -214,7 +316,6 @@ void main() {
     final listener = await pumpWindowManager(tester);
 
     listener.onWindowActivate();
-    listener.onWindowFocus();
     await tester.pump();
 
     expect(window.shows, 1);
@@ -226,7 +327,7 @@ void main() {
     final gate = Completer<void>();
     window.geometryGate = gate;
 
-    listener.onWindowMove();
+    listener.onWindowGeometryChanged();
     await settleWindowGeometry(tester);
     await tester.pumpWidget(const SizedBox.shrink());
     gate.complete();
@@ -244,7 +345,7 @@ void main() {
     final gate = Completer<void>();
     window.geometryGate = gate;
 
-    listener.onWindowResize();
+    listener.onWindowGeometryChanged();
     await settleWindowGeometry(tester);
     await tester.pumpWidget(const SizedBox.shrink());
     gate.complete();
@@ -259,7 +360,7 @@ void main() {
     window.bounds = const Rect.fromLTWH(0, 0, 1920, 1080);
     window.isNormal = false;
 
-    listener.onWindowResize();
+    listener.onWindowGeometryChanged();
     await settleWindowGeometry(tester);
 
     expect(container.read(windowSettingProvider).width, isNot(1920));
@@ -278,7 +379,7 @@ void main() {
     window.bounds = const Rect.fromLTWH(0, 0, 1200, 900);
     window.supportsPosition = false;
 
-    listener.onWindowMove();
+    listener.onWindowGeometryChanged();
     await settleWindowGeometry(tester);
 
     expect(
@@ -295,12 +396,12 @@ void main() {
     window.bounds = const Rect.fromLTWH(10, 10, 640, 480);
     window.geometryGate = firstGate;
 
-    listener.onWindowMove();
+    listener.onWindowGeometryChanged();
     await settleWindowGeometry(tester);
 
     window.bounds = const Rect.fromLTWH(80, 64, 1200, 900);
     window.geometryGate = null;
-    listener.onWindowMove();
+    listener.onWindowGeometryChanged();
     await settleWindowGeometry(tester);
 
     firstGate.complete();
@@ -328,12 +429,6 @@ void main() {
       expect(tester.takeException(), isNull);
       expect(find.text('body'), findsOneWidget);
     });
-  });
-
-  testWidgets('AppIcon renders the bundled application icon', (tester) async {
-    await tester.pumpWidget(const MaterialApp(home: AppIcon()));
-
-    expect(find.byType(Image), findsOneWidget);
   });
 
   group('WindowHeaderActions', () {
@@ -380,7 +475,7 @@ void main() {
       await pumpActions(tester);
 
       expect(
-        tooltipOf(tester, find.byIcon(Icons.push_pin_outlined)),
+        tooltipOf(tester, find.byGlyph(AppGlyphs.pin)),
         currentAppLocalizations.pinWindow,
       );
       expect(
@@ -409,7 +504,7 @@ void main() {
       await tester.pump();
 
       expect(
-        tooltipOf(tester, find.byIcon(Icons.push_pin)),
+        tooltipOf(tester, find.byGlyph(AppGlyphs.pin)),
         currentAppLocalizations.unpinWindow,
       );
       expect(
@@ -439,7 +534,7 @@ void main() {
     testWidgets('each button reports its own press', (tester) async {
       await pumpActions(tester);
 
-      await tester.tap(find.byIcon(Icons.push_pin_outlined));
+      await tester.tap(find.byGlyph(AppGlyphs.pin));
       await tester.tap(glyph(CaptionGlyph.minimize));
       await tester.tap(glyph(CaptionGlyph.maximize));
       await tester.tap(glyph(CaptionGlyph.close));
@@ -450,15 +545,8 @@ void main() {
   });
 
   group('WindowCaptionController', () {
-    Future<void> emitWindowEvent(String name) async {
-      await TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
-          .handlePlatformMessage(
-            _windowChannel.name,
-            _windowChannel.codec.encodeMethodCall(
-              MethodCall('onEvent', {'eventName': name}),
-            ),
-            (_) {},
-          );
+    Future<void> emitWindowEvent(WindowEvent event) async {
+      fakeWindow.emit(event);
     }
 
     Future<WindowCaptionController> pumpController(WidgetTester tester) async {
@@ -487,19 +575,19 @@ void main() {
       tester,
     ) async {
       final caption = await pumpController(tester);
-      windowCalls.clear();
+      fakeWindow.calls.clear();
 
       await caption.toggleMaximized();
       await tester.pump();
 
-      expect(methodsOf(windowCalls), [
+      expect(methodsOf(fakeWindow.calls), [
         'isFullScreen',
         'isMaximized',
         'maximize',
       ]);
       expect(caption.value.isMaximized, isFalse);
 
-      await emitWindowEvent('maximize');
+      await emitWindowEvent(WindowEvent.maximize);
 
       expect(caption.value.isMaximized, isTrue);
     });
@@ -507,12 +595,12 @@ void main() {
     testWidgets('a maximized window is asked to restore', (tester) async {
       isMaximized = true;
       final caption = await pumpController(tester);
-      windowCalls.clear();
+      fakeWindow.calls.clear();
 
       await caption.toggleMaximized();
-      await emitWindowEvent('unmaximize');
+      await emitWindowEvent(WindowEvent.unmaximize);
 
-      expect(methodsOf(windowCalls), contains('unmaximize'));
+      expect(methodsOf(fakeWindow.calls), contains('unmaximize'));
       expect(caption.value.isMaximized, isFalse);
     });
 
@@ -522,18 +610,18 @@ void main() {
       isFullScreen = true;
       isMaximized = true;
       final caption = await pumpController(tester);
-      windowCalls.clear();
+      fakeWindow.calls.clear();
 
       await caption.toggleMaximized();
 
-      expect(methodsOf(windowCalls), isNot(contains('maximize')));
-      expect(methodsOf(windowCalls), isNot(contains('unmaximize')));
-      final leave = windowCalls.singleWhere(
+      expect(methodsOf(fakeWindow.calls), isNot(contains('maximize')));
+      expect(methodsOf(fakeWindow.calls), isNot(contains('unmaximize')));
+      final leave = fakeWindow.calls.singleWhere(
         (call) => call.method == 'setFullScreen',
       );
-      expect(leave.arguments, {'isFullScreen': false});
+      expect(leave.arguments, {'value': false});
 
-      await emitWindowEvent('leave-full-screen');
+      await emitWindowEvent(WindowEvent.leaveFullScreen);
 
       expect(
         caption.value,
@@ -546,14 +634,14 @@ void main() {
     ) async {
       final caption = await pumpController(tester);
 
-      await emitWindowEvent('maximize');
+      await emitWindowEvent(WindowEvent.maximize);
       expect(caption.value.isMaximized, isTrue);
 
-      await emitWindowEvent('enter-full-screen');
+      await emitWindowEvent(WindowEvent.enterFullScreen);
       expect(caption.value.isFullScreen, isTrue);
 
-      await emitWindowEvent('leave-full-screen');
-      await emitWindowEvent('unmaximize');
+      await emitWindowEvent(WindowEvent.leaveFullScreen);
+      await emitWindowEvent(WindowEvent.unmaximize);
       expect(caption.value, const WindowCaptionState());
     });
 
@@ -570,11 +658,11 @@ void main() {
     testWidgets('disposing stops listening to the window', (tester) async {
       final caption = WindowCaptionController();
       await tester.pump();
-      expect(windowManager.listeners, contains(caption));
+      expect(desktopWindow.listeners, contains(caption));
 
       caption.dispose();
 
-      expect(windowManager.listeners, isNot(contains(caption)));
+      expect(desktopWindow.listeners, isNot(contains(caption)));
     });
   });
 }

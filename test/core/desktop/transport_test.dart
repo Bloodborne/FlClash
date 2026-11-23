@@ -4,42 +4,94 @@ import 'dart:typed_data';
 
 import 'package:fl_clash/core/desktop/transport.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:rust_api/rust_api.dart';
 
-import 'fakes.dart';
+final class _FakeIpcServer implements IpcServer {
+  final StreamController<IpcEvent> _events = StreamController<IpcEvent>();
+  final List<List<int>> sent = [];
+  Object? sendError;
+  Object? closeError;
+  int closeCount = 0;
 
-Uint8List _frame(int type, [List<int> payload = const []]) {
-  return Uint8List.fromList([type, ...payload]);
-}
+  void _add(
+    IpcEventKind kind, {
+    int? pid,
+    List<int> payload = const [],
+    String? error,
+  }) {
+    _events.add(
+      IpcEvent(
+        kind: kind,
+        pid: pid,
+        payload: Uint8List.fromList(payload),
+        error: error,
+      ),
+    );
+  }
 
-Uint8List _processIdPayload(int processId) {
-  return Uint8List(4)
-    ..buffer.asByteData().setUint32(0, processId, Endian.little);
+  void connect([int? pid]) => _add(IpcEventKind.connected, pid: pid);
+
+  void message(List<int> payload) {
+    _add(IpcEventKind.message, payload: payload);
+  }
+
+  void disconnect([String? error]) {
+    _add(IpcEventKind.disconnected, error: error);
+  }
+
+  void fail(String error) => _add(IpcEventKind.failed, error: error);
+
+  void end() => unawaited(_events.close());
+
+  @override
+  Stream<IpcEvent> events() => _events.stream;
+
+  @override
+  void send({required List<int> message}) {
+    final error = sendError;
+    if (error != null) {
+      Error.throwWithStackTrace(error, StackTrace.current);
+    }
+    sent.add(message);
+  }
+
+  @override
+  Future<void> close() async {
+    closeCount++;
+    end();
+    final error = closeError;
+    if (error != null) {
+      Error.throwWithStackTrace(error, StackTrace.current);
+    }
+  }
+
+  @override
+  void dispose() {}
+
+  @override
+  bool get isDisposed => false;
 }
 
 void main() {
-  group('IPCCoreTransport typed events', () {
-    late StreamController<Uint8List> rawEvents;
-    late List<List<int>> sentMessages;
-    late int stopCount;
-    late IPCCoreTransport transport;
+  group('IpcCoreTransport', () {
+    late _FakeIpcServer server;
+    late List<String> boundAddresses;
+    late IpcCoreTransport transport;
 
     setUp(() {
-      rawEvents = StreamController<Uint8List>();
-      sentMessages = [];
-      stopCount = 0;
-      transport = IPCCoreTransport(
+      server = _FakeIpcServer();
+      boundAddresses = [];
+      transport = IpcCoreTransport(
         address: 'test-address',
-        startServer: (_) => rawEvents.stream,
-        sendMessage: (data) async => sentMessages.add(data),
-        stopServer: () async => stopCount++,
+        bind: (address) async {
+          boundAddresses.add(address);
+          return server;
+        },
       );
     });
 
     tearDown(() async {
       await transport.close();
-      if (!rawEvents.isClosed) {
-        await rawEvents.close();
-      }
     });
 
     test(
@@ -47,99 +99,72 @@ void main() {
       () async {
         final events = <DesktopTransportEvent>[];
         final subscription = transport.events.listen(events.add);
-        final open = transport.open();
-        rawEvents.add(_frame(0x00));
-        await open;
+        await transport.open();
+        expect(boundAddresses, ['test-address']);
+        expect(transport.state, DesktopTransportState.ready);
 
         final frame = transport.frames.first;
-        rawEvents.add(_frame(0x01, _processIdPayload(1234)));
-        rawEvents.add(_frame(0x03, utf8.encode('payload')));
+        server.connect(1234);
+        server.message(utf8.encode('payload'));
         expect(await frame, utf8.encode('payload'));
-        rawEvents.add(_frame(0x02));
+        expect(transport.state, DesktopTransportState.connected);
+        server.disconnect();
         await pumpEventQueue();
 
         expect(events.whereType<TransportReady>(), hasLength(1));
         expect(events.whereType<TransportConnected>().single.pid, 1234);
         expect(events.whereType<TransportConnected>().single.generation, 1);
-        expect(events.whereType<TransportDisconnected>().single.generation, 1);
+        final disconnected = events.whereType<TransportDisconnected>().single;
+        expect(disconnected.generation, 1);
+        expect(disconnected.error, isNull);
         expect(transport.state, DesktopTransportState.ready);
         await subscription.cancel();
       },
     );
 
-    test('waitUntilConnected waits for a typed connected event', () async {
-      final open = transport.open();
-      rawEvents.add(_frame(0x00));
-      await open;
+    test('opening twice binds once', () async {
+      await Future.wait([transport.open(), transport.open()]);
+      await transport.open();
+
+      expect(boundAddresses, hasLength(1));
+    });
+
+    test('waitUntilConnected waits for a connected event', () async {
+      await transport.open();
 
       final connected = transport.waitUntilConnected(
         const Duration(seconds: 1),
       );
-      rawEvents.add(_frame(0x01, _processIdPayload(4321)));
+      server.connect(4321);
 
       expect((await connected).pid, 4321);
       expect(transport.state, DesktopTransportState.connected);
     });
 
-    test('forwards outgoing messages after ready', () async {
-      final open = transport.open();
-      rawEvents.add(_frame(0x00));
-      await open;
+    test('hands outgoing frames to the server', () async {
+      await transport.open();
 
-      await transport.send('hello');
+      transport.send(utf8.encode('hello'));
 
-      expect(sentMessages, [utf8.encode('hello')]);
+      expect(server.sent, [utf8.encode('hello')]);
     });
 
-    test('emits startup failure and fails open', () async {
-      final failures = transport.events
-          .where((event) => event is TransportFailed)
-          .cast<TransportFailed>()
-          .first;
-      final open = transport.open();
-      rawEvents.add(_frame(0x04, utf8.encode('bind failed')));
+    test('refuses to send before it is open and after it is closed', () async {
+      expect(() => transport.send(const [1]), throwsStateError);
 
-      await expectLater(open, throwsA(isA<StateError>()));
-      expect((await failures).error.toString(), contains('bind failed'));
-      expect(transport.state, DesktopTransportState.failed);
-    });
+      await transport.open();
+      await transport.close();
 
-    test('fails when the Rust event stream closes before ready', () async {
-      final open = transport.open();
-      await rawEvents.close();
-
-      await expectLater(open, throwsA(isA<StateError>()));
-      expect(transport.state, DesktopTransportState.failed);
-    });
-
-    test('rejects an invalid connected process ID frame', () async {
-      final open = transport.open();
-      rawEvents.add(_frame(0x00));
-      await open;
-
-      final failure = transport.events
-          .where((event) => event is TransportFailed)
-          .cast<TransportFailed>()
-          .first;
-      rawEvents.add(_frame(0x01, [0x01]));
-
-      expect((await failure).error.toString(), contains('Invalid IPC'));
-      expect(transport.state, DesktopTransportState.failed);
+      expect(() => transport.send(const [1]), throwsStateError);
+      expect(server.sent, isEmpty);
     });
 
     test('propagates send failures', () async {
-      final failingTransport = IPCCoreTransport(
-        address: 'test-address',
-        startServer: (_) => rawEvents.stream,
-        sendMessage: (_) async => throw StateError('send failed'),
-        stopServer: () async => stopCount++,
-      );
-      final open = failingTransport.open();
-      rawEvents.add(_frame(0x00));
-      await open;
+      server.sendError = StateError('send failed');
+      await transport.open();
 
-      await expectLater(
-        failingTransport.send('hello'),
+      expect(
+        () => transport.send(utf8.encode('hello')),
         throwsA(
           isA<StateError>().having(
             (error) => error.message,
@@ -148,23 +173,77 @@ void main() {
           ),
         ),
       );
-      await failingTransport.close();
+    });
+
+    test('a failed bind fails open until the next one succeeds', () async {
+      var attempts = 0;
+      final flakyTransport = IpcCoreTransport(
+        address: 'test-address',
+        bind: (_) async {
+          if (++attempts == 1) {
+            throw StateError('bind failed');
+          }
+          return server;
+        },
+      );
+      final failure = flakyTransport.events
+          .where((event) => event is TransportFailed)
+          .cast<TransportFailed>()
+          .first;
+
+      await expectLater(flakyTransport.open(), throwsStateError);
+
+      expect((await failure).error.toString(), contains('bind failed'));
+      expect(flakyTransport.state, DesktopTransportState.failed);
+      await expectLater(
+        flakyTransport.waitUntilConnected(const Duration(seconds: 1)),
+        throwsStateError,
+      );
+
+      await flakyTransport.open();
+      expect(flakyTransport.state, DesktopTransportState.ready);
+      await flakyTransport.close();
+    });
+
+    test('fails when the server stops reporting events', () async {
+      await transport.open();
+      final failure = transport.events
+          .where((event) => event is TransportFailed)
+          .cast<TransportFailed>()
+          .first;
+
+      server.end();
+
+      expect((await failure).error.toString(), contains('stopped'));
+      expect(transport.state, DesktopTransportState.failed);
+    });
+
+    test('a disconnect carries the error that ended the connection', () async {
+      await transport.open();
+      final disconnected = transport.events
+          .where((event) => event is TransportDisconnected)
+          .cast<TransportDisconnected>()
+          .first;
+
+      server.connect();
+      server.disconnect('frame exceeds the limit');
+
+      expect((await disconnected).error.toString(), contains('exceeds'));
+      expect(transport.state, DesktopTransportState.ready);
     });
 
     test('assigns a fresh generation after reconnecting', () async {
-      final open = transport.open();
-      rawEvents.add(_frame(0x00));
-      await open;
-
+      await transport.open();
       final connections = <TransportConnected>[];
       final subscription = transport.events.listen((event) {
         if (event is TransportConnected) {
           connections.add(event);
         }
       });
-      rawEvents.add(_frame(0x01));
-      rawEvents.add(_frame(0x02));
-      rawEvents.add(_frame(0x01, _processIdPayload(4321)));
+
+      server.connect();
+      server.disconnect();
+      server.connect(4321);
       await pumpEventQueue();
 
       expect(connections.map((event) => event.generation), [1, 2]);
@@ -172,133 +251,150 @@ void main() {
       await subscription.cancel();
     });
 
-    test('a data frame hands out a view rather than a copy', () async {
-      final open = transport.open();
-      rawEvents.add(_frame(0x00));
-      await open;
+    test('close is idempotent', () async {
+      await transport.open();
 
-      final frame = transport.frames.first;
-      final source = _frame(0x03, utf8.encode('payload'));
-      rawEvents.add(source);
+      await transport.close();
+      await transport.close();
 
-      final payload = await frame;
-      expect(payload, utf8.encode('payload'));
-      expect(payload.offsetInBytes, 1);
-      source[1] = 0x5a;
-      expect(payload[0], 0x5a);
+      expect(server.closeCount, 1);
+      expect(transport.state, DesktopTransportState.closed);
+      await expectLater(transport.open(), throwsStateError);
+      await expectLater(
+        transport.waitUntilConnected(const Duration(seconds: 1)),
+        throwsA(
+          isA<StateError>().having(
+            (error) => error.message,
+            'message',
+            'IPC transport is closed',
+          ),
+        ),
+      );
+    });
+
+    test('closing while binding closes the server that arrives', () async {
+      final binding = Completer<void>();
+      final bound = Completer<IpcServer>();
+      final slowTransport = IpcCoreTransport(
+        address: 'test-address',
+        bind: (_) {
+          binding.complete();
+          return bound.future;
+        },
+      );
+      final open = slowTransport.open();
+      final rejected = expectLater(open, throwsStateError);
+      await binding.future;
+
+      await slowTransport.close();
+      bound.complete(server);
+
+      await rejected;
+      expect(server.closeCount, 1);
+      expect(slowTransport.state, DesktopTransportState.closed);
+    });
+  });
+
+  group('IpcCoreTransport rebinding', () {
+    late List<_FakeIpcServer> servers;
+    late IpcCoreTransport transport;
+
+    setUp(() {
+      servers = [];
+      transport = IpcCoreTransport(
+        address: 'test-address',
+        bind: (_) async {
+          final server = _FakeIpcServer();
+          servers.add(server);
+          return server;
+        },
+      );
+    });
+
+    tearDown(() async {
+      await transport.close();
     });
 
     test(
-      'a recovered transport stops answering with the old failure',
+      'a server failure drops the server and the next open rebinds',
       () async {
-        final open = transport.open();
-        rawEvents.add(_frame(0x00));
-        await open;
-
-        rawEvents.add(_frame(0x04, utf8.encode('boom')));
+        await transport.open();
+        servers.single.connect();
         await pumpEventQueue();
+        final events = <DesktopTransportEvent>[];
+        final subscription = transport.events.listen(events.add);
+
+        servers.single.fail('accept error');
+        servers.single.connect();
+        servers.single.message(utf8.encode('late'));
+        await pumpEventQueue();
+
         expect(transport.state, DesktopTransportState.failed);
-        await expectLater(
-          transport.waitUntilConnected(const Duration(seconds: 1)),
-          throwsA(isA<StateError>()),
-        );
+        expect(transport.connection, isNull);
+        final failure = events.single as TransportFailed;
+        expect(failure.error.toString(), contains('accept error'));
+        expect(servers.single.closeCount, 1);
+        expect(() => transport.send(const [1]), throwsStateError);
 
-        rawEvents.add(_frame(0x00));
-        rawEvents.add(_frame(0x01, _processIdPayload(4321)));
+        await transport.open();
+        servers.last.connect(77);
         await pumpEventQueue();
 
-        final connected = await transport.waitUntilConnected(
-          const Duration(seconds: 1),
-        );
-        expect(connected.pid, 4321);
+        expect(servers, hasLength(2));
+        expect(transport.state, DesktopTransportState.connected);
+        expect(transport.connection?.generation, 2);
+        expect(events.whereType<TransportConnected>().single.pid, 77);
+        await subscription.cancel();
       },
     );
 
-    test('close is idempotent', () async {
-      final open = transport.open();
-      rawEvents.add(_frame(0x00));
-      await open;
-
-      await transport.close();
-      await transport.close();
-
-      expect(stopCount, 1);
-      expect(transport.state, DesktopTransportState.closed);
-    });
-  });
-
-  test(
-    'transport binding forwards events after replacing its transport',
-    () async {
-      final firstEvents = StreamController<Uint8List>();
-      final secondEvents = StreamController<Uint8List>();
-      var firstStopCount = 0;
-      final first = IPCCoreTransport(
-        address: 'first',
-        startServer: (_) => firstEvents.stream,
-        sendMessage: (_) async {},
-        stopServer: () async => firstStopCount++,
-      );
-      final second = IPCCoreTransport(
-        address: 'second',
-        startServer: (_) => secondEvents.stream,
-        sendMessage: (_) async {},
-        stopServer: () async {},
-      );
-      final binding = DesktopCoreTransportBinding(first);
-      final connectedEvents = <TransportConnected>[];
-      final subscription = binding.events.listen((event) {
-        if (event is TransportConnected) {
-          connectedEvents.add(event);
-        }
-      });
-
-      final firstOpen = binding.open();
-      firstEvents.add(_frame(0x00));
-      await firstOpen;
-      await binding.replace(second);
-      final secondOpen = binding.open();
-      secondEvents.add(_frame(0x00));
-      await secondOpen;
-      secondEvents.add(_frame(0x01, _processIdPayload(5678)));
+    test('reset drops the peer and keeps subscriptions', () async {
+      final events = <DesktopTransportEvent>[];
+      final subscription = transport.events.listen(events.add);
+      await transport.open();
+      servers.single.connect(1234);
       await pumpEventQueue();
 
-      expect(firstStopCount, 1);
-      expect(binding.address, 'second');
-      expect(connectedEvents.single.pid, 5678);
+      await transport.reset();
 
+      expect(transport.state, DesktopTransportState.idle);
+      expect(transport.connection, isNull);
+      expect(servers.single.closeCount, 1);
+      final disconnected = events.whereType<TransportDisconnected>().single;
+      expect(disconnected.generation, 1);
+      expect(disconnected.error.toString(), contains('reset'));
+      expect(events.whereType<TransportFailed>(), isEmpty);
+
+      await transport.open();
+      servers.last.connect(5678);
+      await pumpEventQueue();
+      transport.send(utf8.encode('hello'));
+
+      expect(servers, hasLength(2));
+      expect(servers.first.sent, isEmpty);
+      expect(servers.last.sent, [utf8.encode('hello')]);
+      final connection = events.whereType<TransportConnected>().last;
+      expect(connection.pid, 5678);
+      expect(connection.generation, 2);
       await subscription.cancel();
-      await binding.close();
-      await firstEvents.close();
-      await secondEvents.close();
-    },
-  );
+    });
 
-  test('replacing a connected transport emits a typed failure', () async {
-    final first = FakeDesktopCoreTransport.connected();
-    final second = FakeDesktopCoreTransport();
-    final binding = DesktopCoreTransportBinding(first);
-    final failure = binding.events
-        .where((event) => event is TransportFailed)
-        .cast<TransportFailed>()
-        .first;
+    test('closing before the bind begins never binds', () async {
+      final open = transport.open();
+      final rejected = expectLater(open, throwsStateError);
 
-    await binding.replace(second);
+      await transport.close();
 
-    expect((await failure).error.toString(), contains('replaced'));
-    await binding.close();
-  });
+      await rejected;
+      expect(servers, isEmpty);
+    });
 
-  test(
-    'replacement remains usable when the old transport close fails',
-    () async {
-      final first = FakeDesktopCoreTransport()
-        ..closeError = StateError('close failed');
-      final second = FakeDesktopCoreTransport();
-      final binding = DesktopCoreTransportBinding(first);
+    test('reset stays usable when the dropped server fails to close', () async {
+      await transport.open();
+      servers.single.closeError = StateError('close failed');
 
       await expectLater(
-        binding.replace(second),
+        transport.reset(),
         throwsA(
           isA<StateError>().having(
             (error) => error.message,
@@ -308,14 +404,39 @@ void main() {
         ),
       );
 
-      expect(binding.address, second.address);
-      final ready = binding.events
-          .where((event) => event is TransportReady)
-          .cast<TransportReady>()
-          .first;
-      second.ready();
-      await ready;
-      await binding.close();
-    },
-  );
+      await transport.open();
+      expect(transport.state, DesktopTransportState.ready);
+      expect(servers, hasLength(2));
+    });
+
+    test('reset discards a bind in flight and closes its server', () async {
+      final binding = Completer<void>();
+      final bound = Completer<IpcServer>();
+      final server = _FakeIpcServer();
+      final slowTransport = IpcCoreTransport(
+        address: 'test-address',
+        bind: (_) {
+          binding.complete();
+          return bound.future;
+        },
+      );
+      final rejected = expectLater(slowTransport.open(), throwsStateError);
+      await binding.future;
+
+      final reset = slowTransport.reset();
+      bound.complete(server);
+      await reset;
+
+      await rejected;
+      expect(server.closeCount, 1);
+      expect(slowTransport.state, DesktopTransportState.idle);
+      await slowTransport.close();
+    });
+
+    test('reset is refused once the transport is closed', () async {
+      await transport.close();
+
+      await expectLater(transport.reset(), throwsStateError);
+    });
+  });
 }

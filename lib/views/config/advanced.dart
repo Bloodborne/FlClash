@@ -1,92 +1,108 @@
 import 'package:fl_clash/common/common.dart';
-import 'package:fl_clash/models/clash_config.dart';
-import 'package:fl_clash/providers/config.dart';
+import 'package:fl_clash/enum/enum.dart';
+import 'package:fl_clash/providers/app.dart';
+import 'package:fl_clash/ui/icons/icons.dart';
+import 'package:fl_clash/ui/ui.dart';
 import 'package:fl_clash/views/config/dns.dart';
+import 'package:fl_clash/views/config/filters.dart';
+import 'package:fl_clash/views/config/icon_sets.dart';
+import 'package:fl_clash/views/config/mitm.dart';
+import 'package:fl_clash/views/config/mitm_modules.dart';
 import 'package:fl_clash/views/config/network.dart';
-import 'package:fl_clash/views/config/on_demand.dart';
+import 'package:fl_clash/views/config/providers.dart';
 import 'package:fl_clash/views/config/scripts.dart';
-import 'package:fl_clash/widgets/list.dart';
-import 'package:fl_clash/widgets/scaffold.dart';
-import 'package:material_ui/material_ui.dart';
+import 'package:fl_clash/views/profiles/custom/custom_proxies.dart';
+import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'rules.dart';
 
-class AdvancedConfigView extends StatelessWidget {
-  const AdvancedConfigView({super.key});
+class AdvancedConfigView extends ConsumerWidget {
+  const AdvancedConfigView({super.key, this.isAndroid});
+
+  final bool? isAndroid;
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final appLocalizations = context.appLocalizations;
-    final List<Widget> items = [
+    final isAndroid = this.isAndroid ?? system.isAndroid;
+    final items = [
       ListItem.open(
         title: Text(appLocalizations.network),
-        subtitle: Text(appLocalizations.networkDesc),
-        leading: const Icon(Icons.vpn_key),
-        blur: false,
+        leading: const GlyphIcon(AppGlyphs.key),
         widget: BaseScaffold(
           title: appLocalizations.network,
           body: const NetworkListView(),
         ),
       ),
       ListItem.open(
-        title: Text(appLocalizations.onDemand),
-        subtitle: Text(appLocalizations.onDemandDesc),
-        leading: const Icon(Icons.ssid_chart, fontWeight: FontWeight.w900),
-        widget: const OnDemandView(),
-        blur: false,
-      ),
-      ListItem.open(
         title: const Text('DNS'),
-        subtitle: Text(appLocalizations.dnsDesc),
-        leading: const Icon(Icons.dns),
-        widget: BaseScaffold(
-          title: 'DNS',
-          actions: [
-            Consumer(
-              builder: (_, ref, _) {
-                return IconButton(
-                  onPressed: () async {
-                    final res = await dialogs.showMessage(
-                      title: appLocalizations.reset,
-                      message: TextSpan(text: appLocalizations.resetTip),
-                    );
-                    if (res != true) {
-                      return;
-                    }
-                    ref
-                        .read(patchClashConfigProvider.notifier)
-                        .update((state) => state.copyWith(dns: defaultDns));
-                  },
-                  tooltip: appLocalizations.reset,
-                  icon: const Icon(Icons.replay),
-                );
-              },
-            ),
-          ],
-          body: const DnsListView(),
-        ),
-        blur: false,
+        leading: const GlyphIcon(AppGlyphs.dns),
+        widget: const DnsView(),
       ),
       ListItem.open(
         title: Text(appLocalizations.addedRules),
-        subtitle: Text(appLocalizations.controlGlobalAddedRules),
-        leading: const Icon(Icons.library_books),
+        leading: const GlyphIcon(AppGlyphs.rules),
         widget: const AddedRulesView(),
-        blur: false,
       ),
       ListItem.open(
         title: Text(appLocalizations.script),
-        subtitle: Text(appLocalizations.overrideScript),
-        leading: const Icon(Icons.rocket, fontWeight: FontWeight.w900),
+        leading: const GlyphIcon(AppGlyphs.code),
         widget: const ScriptsView(),
-        blur: false,
       ),
     ];
-    return BaseScaffold(
+    final customItems = [
+      ListItem.open(
+        title: Text(appLocalizations.proxies),
+        leading: const GlyphIcon(AppGlyphs.proxies),
+        widget: const CustomProxiesView(),
+      ),
+      ListItem.open(
+        title: Text(appLocalizations.ruleProviders),
+        leading: const GlyphIcon(AppGlyphs.resources),
+        widget: const ClashProvidersView(),
+      ),
+      ListItem.open(
+        title: Text(appLocalizations.filters),
+        leading: const GlyphIcon(AppGlyphs.filter),
+        widget: const FiltersView(),
+      ),
+      ListItem.open(
+        title: Text(appLocalizations.iconSets),
+        leading: const GlyphIcon(AppGlyphs.photos),
+        widget: const IconSetsView(),
+      ),
+    ];
+    return Scaffold(
       title: appLocalizations.advancedConfig,
-      body: generateListView(
-        items.separated(const Divider(height: 0)).toList(),
+      isLoading: ref.watch(loadingProvider(LoadingTag.mitm)),
+      body: ListView(
+        padding: const EdgeInsets.symmetric(horizontal: 16).copyWith(
+          top: context.sectionsTopPadding,
+          bottom: 16 + context.bottomInset,
+        ),
+        children: [
+          generateSection(items: items),
+          generateSection(
+            title: appLocalizations.customResources,
+            items: customItems,
+          ),
+          if (rsFeature)
+            generateSection(
+              title: appLocalizations.mitm,
+              footer: isAndroid ? appLocalizations.mitmAndroidRootDesc : null,
+              items: [
+                const MitmEnableItem(),
+                const MitmModulesItem(),
+                const MitmHostnameItem(),
+                ListItem.open(
+                  title: Text(appLocalizations.options),
+                  leading: const GlyphIcon(AppGlyphs.sliders),
+                  widget: MitmOptionsView(isAndroid: isAndroid),
+                ),
+              ],
+            ),
+        ],
       ),
     );
   }

@@ -20,6 +20,7 @@ android {
     sourceSets {
         // Unit tests live under android/tests/ instead of each module's src/test.
         getByName("test").java.setSrcDirs(listOf("../tests/common"))
+        getByName("test").kotlin.setSrcDirs(listOf("../tests/common"))
     }
 }
 
@@ -32,8 +33,5 @@ kotlin {
 dependencies {
     implementation(libs.androidx.core)
     implementation(libs.gson)
-    implementation(platform(libs.firebase.bom))
-    implementation(libs.firebase.crashlytics.ndk)
-    implementation(libs.firebase.analytics)
     testImplementation(libs.junit)
 }
