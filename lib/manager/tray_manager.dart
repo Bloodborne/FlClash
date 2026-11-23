@@ -7,7 +7,6 @@ import 'package:fl_clash/common/window.dart';
 import 'package:fl_clash/enum/enum.dart';
 import 'package:fl_clash/providers/action.dart';
 import 'package:fl_clash/providers/app.dart';
-import 'package:fl_clash/providers/config.dart';
 import 'package:fl_clash/providers/state.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -41,23 +40,6 @@ class _TrayManagerState extends ConsumerState<TrayManager> {
         _requestUpdate();
       }
     });
-    ref.listenManual(
-      appSettingProvider.select(
-        (state) => (
-          state.trayIconStoppedPath,
-          state.trayIconProxyPath,
-          state.trayIconTunPath,
-          state.trayIconUseTemplate,
-        ),
-      ),
-      (prev, next) {
-        if (prev != next) {
-          _reportFailure(
-            ref.read(systemActionProvider.notifier).updateTray(),
-          );
-        }
-      },
-    );
     if (system.isMacOS) {
       ref.listenManual(trayDelaysProvider, (prev, next) {
         if (!const DeepCollectionEquality().equals(prev, next)) {
