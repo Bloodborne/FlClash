@@ -1,5 +1,4 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<!-- glyph.svg's geometry; the state shows only in the colors. -->
 <svg width="240" height="240" viewBox="0 0 240 240" xmlns="http://www.w3.org/2000/svg">
   <title>status_3</title>
   <defs>
@@ -21,4 +20,5 @@
     <line x1="90.56" y1="154.43" x2="150.74" y2="119.69" stroke="url(#mid)"/>
   </g>
   <circle cx="121.44" cy="207.92" r="23.16" fill="url(#dot)"/>
+  <text x="180" y="229" font-family="Arial, sans-serif" font-size="58" font-weight="700" fill="#008B8C">T</text>
 </svg>

@@ -7,10 +7,21 @@ const sourceDir = 'assets_source/images/icon';
 const pngOutputDir = 'assets/images/tray/unix';
 const icoOutputDir = 'assets/images/tray/windows';
 const macosOutputDir = 'assets/images/tray/macos';
-const statusIconNames = ['status_1', 'status_2', 'status_3', 'status_4'];
+const statusIconNames = [
+  'status_1',
+  'status_2',
+  'status_3',
+  'status_4',
+  'status_5',
+  'status_6',
+];
 const macosStatusIconSources = {
   'status_1': '$sourceDir/glyph.svg',
+  'status_2': '$sourceDir/status_2.svg',
+  'status_3': '$sourceDir/status_3.svg',
   'status_4': '$sourceDir/status_4.svg',
+  'status_5': '$sourceDir/status_5.svg',
+  'status_6': '$sourceDir/status_6.svg',
 };
 const trayBaseSize = 18;
 const trayScales = [1, 2, 3, 4];
